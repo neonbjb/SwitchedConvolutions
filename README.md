@@ -13,5 +13,16 @@ convolutions selects the computational blocks that will be used for each pixel. 
 computational savings that Dynamic Convolutions expresses is present here: switched convolutions will make your model
 significantly more complex both computationally and in memory usage.
 
-This implementation is very much still in test. I designed it for usage in the generators of GANs, where the generator
-is expected to be able to create hundreds of different styles. I will update this repo with results.
+The idea is that some types of networks need this form of fine attention across computational blocks. In particular,
+I designed this for GAN generators, which are expected to infer underlying style from many possible choices.
+
+This implementation is in Pytorch. It is very much still in test. test.py works great for a basic proof of concept, and 
+will output a set of tensorboard logs which should give a great depiction of what is actually happening with the switching 
+mechanism. However, ablation on this simple test network shows that the switching provides little to no performace
+gain. I expect it will be more relevant in generators and larger networks. I will update this repo with results.
+
+
+# License
+
+This code is under the Apache 2.0 license. I ask that you cite my name or this page if you use this code or the concepts
+therein in your own projects.
