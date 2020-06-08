@@ -35,14 +35,6 @@ def initialize_weights(net_l, scale=1):
                 init.constant_(m.bias.data, 0.0)
 
 
-def compute_attention_specificity(att_weights, topk=3):
-    att = att_weights.detach()
-    vals, indices = torch.topk(att, topk, dim=-1)
-    avg = torch.sum(vals, dim=-1)
-    avg = avg.flatten().mean()
-    return avg.item(), indices.flatten().detach()
-
-
 class DynamicConvTestModule(nn.Module):
     def __init__(self):
         super(DynamicConvTestModule, self).__init__()

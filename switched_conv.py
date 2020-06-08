@@ -96,7 +96,7 @@ class ConvSwitch(nn.Module):
         # Note: conv_attention will generally be cast to float32 regardless of the input type, so cast conv_outputs to
         #       float32 as well to match it.
         attention_result = torch.einsum(
-            "...ij,...j->...i", [conv_outputs.to(dtype=torch.float32), conv_attention]
+            "...ij,...j->...i", [conv_outputs.float(), conv_attention]
         )
 
         # Remember to shift the filters back into the expected slot.
@@ -104,6 +104,23 @@ class ConvSwitch(nn.Module):
             return attention_result.permute(0, 3, 1, 2), conv_attention
         else:
             return attention_result.permute(0, 3, 1, 2)
+
+
+'''
+This is a debug function for the attention mechanism used by ConvSwitch.
+
+Pulls the top k values from each attention vector across the image (b,w,h) and computes the mean. This value is termed
+the "specificity" and represents how much attention is paid to the top-k filters. It ranges between [0,1].
+
+Also returns a flat list of indices that represent the top-k attention values. These can be fed into a histogram to
+see how the model is utilizing the computational blocks underlying the switch.
+'''
+def compute_attention_specificity(att_weights, topk=3):
+    att = att_weights.detach()
+    vals, indices = torch.topk(att, topk, dim=-1)
+    avg = torch.sum(vals, dim=-1)
+    avg = avg.flatten().mean()
+    return avg.item(), indices.flatten().detach()
 
 
 """
