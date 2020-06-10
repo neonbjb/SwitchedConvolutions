@@ -191,3 +191,51 @@ class SwitchedConv2d(SwitchedAbstractBlock):
             att_padding,
             initial_temperature=initial_temperature,
         )
+
+"""
+ Implements multi-headed convolutional switching across an abstract block. The block should be provided as follows:
+ functools.partial(<block>, <constructor parameters>)
+ See the next class for a sample.
+"""
+class MultiHeadSwitchedAbstractBlock(nn.Module):
+
+    def __init__(
+        self,
+        partial_block_constructor,
+        nf_attention_basis,
+        num_blocks=8,
+        num_heads=2,
+        att_kernel_size=5,
+        att_stride=1,
+        att_pads=2,
+        att_interpolate_scale_factor=1,
+        initial_temperature=1,
+    ):
+        super(MultiHeadSwitchedAbstractBlock, self).__init__()
+        self.block_list = nn.ModuleList(
+            [partial_block_constructor() for _ in range(num_blocks)]
+        )
+        self.switches = nn.ModuleList([ConvSwitch(nf_attention_basis, num_blocks, att_kernel_size, att_stride, att_pads, att_interpolate_scale_factor, initial_temperature) for i in range(num_heads)])
+
+    def forward(self, x, output_attention_weights=False):
+        # Build up the individual conv components first.
+        block_outputs = []
+        for block in self.block_list:
+            block_outputs.append(block.forward(x))
+
+        outs = []
+        atts = []
+        for switch in self.switches:
+            out, att = switch.forward(x, block_outputs, output_attention_weights)
+            outs.append(out)
+            atts.append(att)
+        # The output will be the heads concatenated across the filter dimension. Attention outputs will be stacked into
+        # a new dimension.
+        if output_attention_weights:
+            return torch.cat(outs, 1), torch.stack(atts, 1)
+        else:
+            return torch.cat(outs, 1)
+
+    def set_attention_temperature(self, temp):
+        for switch in self.switches:
+            switch.set_attention_temperature(temp)
