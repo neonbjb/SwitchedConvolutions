@@ -199,6 +199,19 @@ class SwitchedConv2d(SwitchedAbstractBlock):
 """
 class MultiHeadSwitchedAbstractBlock(nn.Module):
 
+    '''
+    partial_block_constructor: functools.partial() of a block that performs processing on an image of shape (b,nf_attention_basis,w,h)
+    nf_attention_basis: the filter count that will be fed into this block.
+    num_blocks: the number of parallel blocks to compute
+    num_heads: the number of switch heads to bring to bear against the blocks.
+    att_kernel_size: the size of the convolutional kernel used to compute the switching probabilities.
+    att_stride: this is the stride for the switching kernel. It should match the aggregate stride of blocks created by partial_block_constructor
+    att_pads: likewise, stride for the switching convolution.
+    att_interpolate_scale_factor: Can be used to upsample the output of the switching conv.
+    initial_temperature: Controls the initial setting of the switching softmax.
+    multi_head_input: When true, expect input of shape (b,heads,f,w,h), else (b,f,w,h)
+    concat_heads_into_filter: When true, return from this is shape (b,f*heads,w,h). When false, it is (b,heads,f,w,h)
+    '''
     def __init__(
         self,
         partial_block_constructor,
@@ -210,12 +223,19 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
         att_pads=2,
         att_interpolate_scale_factor=1,
         initial_temperature=1,
+        multi_head_input=False,
+        concat_heads_into_filters=True
     ):
         super(MultiHeadSwitchedAbstractBlock, self).__init__()
         self.block_list = nn.ModuleList(
             [partial_block_constructor() for _ in range(num_blocks)]
         )
         self.switches = nn.ModuleList([ConvSwitch(nf_attention_basis, num_blocks, att_kernel_size, att_stride, att_pads, att_interpolate_scale_factor, initial_temperature) for i in range(num_heads)])
+        self.concat_heads_into_filters = concat_heads_into_filters
+        self.multi_head_input = multi_head_input
+        if self.multi_head_input:
+            self.mhead_squash = nn.Conv3d(nf_attention_basis, nf_attention_basis, (num_heads, 1, 1), (num_heads, 1, 1))
+
 
     def forward(self, x, output_attention_weights=False):
         # Build up the individual conv components first.
@@ -223,18 +243,29 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
         for block in self.block_list:
             block_outputs.append(block.forward(x))
 
+        # Squash input heads before feeding into attention switches.
+        if self.multi_head_input:
+            x = x.permute(0, 2, 1, 3, 4)
+            x = self.mhead_squash(x)
+            x = torch.squeeze(x, dim=2)
+
         outs = []
         atts = []
         for switch in self.switches:
             out, att = switch.forward(x, block_outputs, output_attention_weights)
             outs.append(out)
             atts.append(att)
+
+        if self.concat_heads_into_filters:
+            out = torch.cat(outs, 1)
+        else:
+            out = torch.stack(outs, 1)
         # The output will be the heads concatenated across the filter dimension. Attention outputs will be stacked into
         # a new dimension.
         if output_attention_weights:
-            return torch.cat(outs, 1), torch.stack(atts, 1)
+            return out, torch.stack(atts, 1)
         else:
-            return torch.cat(outs, 1)
+            return out
 
     def set_attention_temperature(self, temp):
         for switch in self.switches:
