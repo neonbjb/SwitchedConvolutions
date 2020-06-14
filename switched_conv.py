@@ -209,6 +209,7 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
     att_pads: likewise, stride for the switching convolution.
     att_interpolate_scale_factor: Can be used to upsample the output of the switching conv.
     initial_temperature: Controls the initial setting of the switching softmax.
+    include_skip_head: If True, the last head will not use the block, but will instead feed-forward the input. Only works if the input and output dimensions of the processing block are equal.
     multi_head_input: When true, expect input of shape (b,heads,f,w,h), else (b,f,w,h)
     concat_heads_into_filter: When true, return from this is shape (b,f*heads,w,h). When false, it is (b,heads,f,w,h)
     '''
@@ -223,16 +224,23 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
         att_pads=2,
         att_interpolate_scale_factor=1,
         initial_temperature=1,
+        include_skip_head=False,
         multi_head_input=False,
         concat_heads_into_filters=True
     ):
         super(MultiHeadSwitchedAbstractBlock, self).__init__()
+        self.include_skip_head = include_skip_head
+        if multi_head_input:
+            processing_blocks = num_blocks - num_heads if self.include_skip_head else num_blocks
+        else:
+            processing_blocks = num_blocks - 1 if self.include_skip_head else num_blocks
         self.block_list = nn.ModuleList(
-            [partial_block_constructor() for _ in range(num_blocks)]
+            [partial_block_constructor() for _ in range(processing_blocks)]
         )
         self.switches = nn.ModuleList([ConvSwitch(nf_attention_basis, num_blocks, att_kernel_size, att_stride, att_pads, att_interpolate_scale_factor, initial_temperature) for i in range(num_heads)])
         self.concat_heads_into_filters = concat_heads_into_filters
         self.multi_head_input = multi_head_input
+        self.num_heads = num_heads
         if self.multi_head_input:
             self.mhead_squash = nn.Conv3d(nf_attention_basis, nf_attention_basis, (num_heads, 1, 1), (num_heads, 1, 1))
 
@@ -242,6 +250,12 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
         block_outputs = []
         for block in self.block_list:
             block_outputs.append(block.forward(x))
+        if self.include_skip_head:
+            if self.multi_head_input:
+                for h in range(self.num_heads):
+                    block_outputs.append(x[:, h, :])
+            else:
+                block_outputs.append(x)
 
         # Squash input heads before feeding into attention switches.
         if self.multi_head_input:
