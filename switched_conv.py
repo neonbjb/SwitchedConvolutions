@@ -5,6 +5,63 @@ import torch.nn.init as init
 import torch.nn.functional as F
 
 
+def initialize_weights(module):
+    for m in module.modules():
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv3d):
+            init.kaiming_normal_(m.weight, a=0, mode='fan_in')
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+
+class BareConvSwitch(nn.Module):
+    """
+    Initializes the ConvSwitch.
+      initial_temperature: The initial softmax temperature of the attention mechanism. For training from scratch, this
+                           should be set to a high number, for example 30.
+    """
+
+    def __init__(
+        self,
+        initial_temperature=1,
+    ):
+        super(BareConvSwitch, self).__init__()
+
+        self.softmax = nn.Softmax(dim=-1)
+        self.temperature = initial_temperature
+
+        initialize_weights(self)
+
+    def set_attention_temperature(self, temp):
+        self.temperature = temp
+
+    # SwitchedConv.forward takes these arguments;
+    # conv_group:      List of inputs (len=n) to the switch, each with shape (b,f,w,h)
+    # conv_attention:  Attention computation as an output from a conv layer, of shape (b,n,w,h). Before softmax
+    # output_attention_weights: If True, post-softmax attention weights are returned.
+    def forward(self, conv_group, conv_attention, output_attention_weights=False):
+        # Stack up the conv_group input first and permute it to (batch, width, height, filter, groups)
+        conv_outputs = torch.stack(conv_group, dim=0).permute(1, 3, 4, 2, 0)
+
+        conv_attention = conv_attention.permute(0, 2, 3, 1)
+        conv_attention = self.softmax(conv_attention / self.temperature)
+
+        # conv_outputs shape:   (batch, width, height, filters, groups)
+        # conv_attention shape: (batch, width, height, groups)
+        # We want to format them so that we can matmul them together to produce:
+        # desired shape:        (batch, width, height, filters)
+        # Note: conv_attention will generally be cast to float32 regardless of the input type, so cast conv_outputs to
+        #       float32 as well to match it.
+        attention_result = torch.einsum(
+            "...ij,...j->...i", [conv_outputs.float(), conv_attention]
+        )
+
+        # Remember to shift the filters back into the expected slot.
+        if output_attention_weights:
+            return attention_result.permute(0, 3, 1, 2), conv_attention
+        else:
+            return attention_result.permute(0, 3, 1, 2)
+
+
 class ConvSwitch(nn.Module):
     """
     Initializes the ConvSwitch.
@@ -61,6 +118,8 @@ class ConvSwitch(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
         self.temperature = initial_temperature
+
+        initialize_weights(self)
 
     def set_attention_temperature(self, temp):
         self.temperature = temp
@@ -243,6 +302,7 @@ class MultiHeadSwitchedAbstractBlock(nn.Module):
         self.num_heads = num_heads
         if self.multi_head_input:
             self.mhead_squash = nn.Conv3d(nf_attention_basis, nf_attention_basis, (num_heads, 1, 1), (num_heads, 1, 1))
+            initialize_weights(self.mhead_squash)
 
 
     def forward(self, x, output_attention_weights=False):
