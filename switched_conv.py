@@ -1,16 +1,44 @@
 import functools
 import torch
 import torch.nn as nn
-import torch.nn.init as init
 import torch.nn.functional as F
+from switched_conv_util import initialize_weights
+
+"""
+AttentionNorm is meant to be applied against the Softmax output of an attention function across a large set of
+attention computations. It is meant to promote an equal distribution of attention weights by decreasing the magnitude
+of attention weights that are over-used and increasing the magnitude of under-used weights.
+
+The return value has the exact same format as a normal Softmax output and can be used directly into the input of an
+attention equation.
+"""
+class AttentionNorm(nn.Module):
+    def __init__(self):
+        super(AttentionNorm, self).__init__()
+
+    # Input into forward is an attention tensor of shape (batch,width,height,groups)
+    def forward(self, x: torch.Tensor):
+        assert len(x.shape) == 4
+        flat = x.sum(dim=[0, 1, 2], keepdim=True)
+        norm = flat / torch.sum(flat)
+        x = x * norm
+        # Need to re-normalize x so that the groups dimension sum to 1.
+        groups_sum = x.sum(dim=3, keepdim=True)
+        return x / groups_sum
 
 
-def initialize_weights(module):
-    for m in module.modules():
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv3d):
-            init.kaiming_normal_(m.weight, a=0, mode='fan_in')
-            if m.bias is not None:
-                m.bias.data.zero_()
+"""
+ This is an attention vector mutation that forces attention values to either 1 or 0, with only a single
+ value per group getting 1 (the max)
+"""
+class HardAttention(nn.Module):
+    def __init__(self):
+        super(AttentionNorm, self).__init__()
+
+    # Input into forward is an attention tensor of shape (batch,width,height,groups)
+    def forward(self, x: torch.Tensor):
+        assert len(x.shape) == 4
+        pass
 
 
 class BareConvSwitch(nn.Module):
@@ -18,16 +46,19 @@ class BareConvSwitch(nn.Module):
     Initializes the ConvSwitch.
       initial_temperature: The initial softmax temperature of the attention mechanism. For training from scratch, this
                            should be set to a high number, for example 30.
+      attention_norm:      If specified, the AttentionNorm layer applied immediately after Softmax.
     """
 
     def __init__(
         self,
         initial_temperature=1,
+        attention_norm=None
     ):
         super(BareConvSwitch, self).__init__()
 
         self.softmax = nn.Softmax(dim=-1)
         self.temperature = initial_temperature
+        self.attention_norm = attention_norm
 
         initialize_weights(self)
 
@@ -44,6 +75,8 @@ class BareConvSwitch(nn.Module):
 
         conv_attention = conv_attention.permute(0, 2, 3, 1)
         conv_attention = self.softmax(conv_attention / self.temperature)
+        if self.attention_norm:
+            conv_attention = self.attention_norm(conv_attention)
 
         # conv_outputs shape:   (batch, width, height, filters, groups)
         # conv_attention shape: (batch, width, height, groups)

@@ -1,6 +1,18 @@
 import torch
+from torch import nn
 import torchvision
 import os
+import torch.nn.init as init
+
+
+# Universal weight initialization procedure used by switched_conv
+def initialize_weights(module):
+    for m in module.modules():
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv3d):
+            init.kaiming_normal_(m.weight, a=0, mode='fan_in')
+            if m.bias is not None:
+                m.bias.data.zero_()
+
 
 # Copied from torchvision.utils.save_image. Allows specifying pixel format.
 def save_image(tensor, fp, nrow=8, padding=2,
@@ -14,7 +26,7 @@ def save_image(tensor, fp, nrow=8, padding=2,
     im.save(fp, format=format)
 
 
-def save_attention_to_image(attention_out, attention_size, step, fname_part="map", l_mult=1.0):
+def save_attention_to_image(folder, attention_out, attention_size, step, fname_part="map", l_mult=1.0):
     magnitude, indices = torch.topk(attention_out, 1, dim=-1)
     magnitude = magnitude.squeeze(3)
     indices = indices.squeeze(3)
@@ -27,5 +39,6 @@ def save_attention_to_image(attention_out, attention_size, step, fname_part="map
     value = magnitude * l_mult
     hsv_img = torch.stack([hue, saturation, value], dim=1)
 
-    os.makedirs("attention_maps/%s" % (fname_part,), exist_ok=True)
-    save_image(hsv_img, "attention_maps/%s/attention_map_%i.png" % (fname_part, step,), pix_format="HSV")
+    output_path=os.path.join(folder, "attention_maps", fname_part)
+    os.makedirs(output_path, exist_ok=True)
+    save_image(hsv_img, os.path.join(output_path, "attention_map_%i.png" % (step,)), pix_format="HSV")
