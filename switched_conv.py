@@ -20,9 +20,13 @@ class AttentionNorm(nn.Module):
     def forward(self, x: torch.Tensor):
         assert len(x.shape) == 4
         flat = x.sum(dim=[0, 1, 2], keepdim=True)
-        norm = flat / torch.sum(flat)
-        x = x * norm
-        # Need to re-normalize x so that the groups dimension sum to 1.
+        norm = flat / torch.mean(flat)
+        # norm represents the magnitude above the mean that each group is getting. adjust the actual attention vector
+        # by dividing by the norm, which should reduce the magnitude of "popular" groups and increase the magnitude of
+        # orphans.
+        x = x / norm
+
+        # Need to re-normalize x so that the groups dimension sum to 1, just like when it was fed in.
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
 
