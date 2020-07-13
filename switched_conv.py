@@ -32,13 +32,13 @@ class AttentionNorm(nn.Module):
         self.group_size = group_size
         # These are all tensors so that they get saved with the graph.
         self.accumulator = torch.zeros(accumulator_size, group_size, requires_grad=False)
-        self.accumulator_index = torch.zeros(1, dtype=int, device='cpu', requires_grad=False)
-        self.accumulator_filled = torch.zeros(1, dtype=int, device='cpu', requires_grad=False)
+        self.accumulator_index = torch.zeros(1, dtype=torch.int, device='cpu', requires_grad=False)
+        self.accumulator_filled = torch.zeros(1, dtype=torch.bool, device='cpu', requires_grad=False)
 
     # Returns tensor of shape (group,) with a normalized mean across the accumulator in the range [0,1]. The intent
     # is to divide your inputs by this value.
     def compute_buffer_norm(self):
-        if self.accumulator_filled.item() == 0:
+        if self.accumulator_filled == 0:
             return torch.mean(self.accumulator, dim=0)
         else:
             return torch.ones(self.group_size, device=self.accumulator.device)
@@ -47,11 +47,11 @@ class AttentionNorm(nn.Module):
         flat = x.sum(dim=[0, 1, 2], keepdim=True)
         norm = flat / torch.mean(flat)
 
-        self.accumulator[self.accumulator_index.item()] = norm.detach()
+        self.accumulator[self.accumulator_index] = norm.detach()
         self.accumulator_index += 1
         if self.accumulator_index >= self.accumulator_desired_size:
             self.accumulator_index = 0
-            self.accumulator_filled = 1
+            self.accumulator_filled = True
 
     # Input into forward is an attention tensor of shape (batch,width,height,groups)
     def forward(self, x: torch.Tensor):
