@@ -32,8 +32,8 @@ class AttentionNorm(nn.Module):
         self.group_size = group_size
         # These are all tensors so that they get saved with the graph.
         self.accumulator = torch.zeros(accumulator_size, group_size, requires_grad=False)
-        self.accumulator_index = torch.zeros(1, device='cpu', requires_grad=False)
-        self.accumulator_filled = torch.zeros(1, device='cpu', requires_grad=False)
+        self.accumulator_index = torch.zeros(1, dtype=int, device='cpu', requires_grad=False)
+        self.accumulator_filled = torch.zeros(1, dtype=int, device='cpu', requires_grad=False)
 
     # Returns tensor of shape (group,) with a normalized mean across the accumulator in the range [0,1]. The intent
     # is to divide your inputs by this value.
