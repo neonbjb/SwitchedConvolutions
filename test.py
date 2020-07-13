@@ -228,7 +228,7 @@ def test_dynamic_conv():
                 net.set_temp(temperature)
                 print("Temperature drop. Now: %i" % (temperature,))
             step += 1
-        torch.save((net.state_dict(), optimizer.state_dict()), "test_net.pth")
+        torch.save((net.state_dict(), optimizer.state_dict(), amp.state_dict()), "test_net.pth")
 
 
 if __name__ == "__main__":

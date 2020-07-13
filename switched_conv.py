@@ -11,38 +11,62 @@ of attention weights that are over-used and increasing the magnitude of under-us
 
 The return value has the exact same format as a normal Softmax output and can be used directly into the input of an
 attention equation.
+
+Since the whole point of convolutional attention is to enable training extra-wide networks to operate on a large number
+of image categories, it makes almost no sense to perform this type of norm against a single mini-batch of images: some
+of the attentions will not be used in such a small context - and that's good! This is solved by accumulating. Every 
+forward pass computes a norm across the current minibatch. That norm is added into a rotating buffer of size 
+<accumulator_size>. The actual normalization occurs across the entire rotating buffer.
+
+You should set accumulator size according to two factors:
+- Your batch size. Smaller batch size should mean greater accumulator size.
+- Your image diversity. More diverse images have less need for the accumulator.
+- How wide your attention/switching group size is. More groups mean you're going to want more accumulation.
+
+Note that this norm does nothing for the first <accumulator_size> iterations.
 """
 class AttentionNorm(nn.Module):
-    def __init__(self):
+    def __init__(self, group_size, accumulator_size=128):
         super(AttentionNorm, self).__init__()
+        self.accumulator_desired_size = accumulator_size
+        self.group_size = group_size
+        # These are all tensors so that they get saved with the graph.
+        self.accumulator = torch.zeros(accumulator_size, group_size, requires_grad=False)
+        self.accumulator_index = torch.zeros(1, device='cpu', requires_grad=False)
+        self.accumulator_filled = torch.zeros(1, device='cpu', requires_grad=False)
+
+    # Returns tensor of shape (group,) with a normalized mean across the accumulator in the range [0,1]. The intent
+    # is to divide your inputs by this value.
+    def compute_buffer_norm(self):
+        if self.accumulator_filled.item() == 0:
+            return torch.mean(self.accumulator, dim=0)
+        else:
+            return torch.ones(self.group_size, device=self.accumulator.device)
+
+    def add_norm_to_buffer(self, x):
+        flat = x.sum(dim=[0, 1, 2], keepdim=True)
+        norm = flat / torch.mean(flat)
+
+        self.accumulator[self.accumulator_index.item()] = norm.detach()
+        self.accumulator_index += 1
+        if self.accumulator_index >= self.accumulator_desired_size:
+            self.accumulator_index = 0
+            self.accumulator_filled = 1
 
     # Input into forward is an attention tensor of shape (batch,width,height,groups)
     def forward(self, x: torch.Tensor):
         assert len(x.shape) == 4
-        flat = x.sum(dim=[0, 1, 2], keepdim=True)
-        norm = flat / torch.mean(flat)
-        # norm represents the magnitude above the mean that each group is getting. adjust the actual attention vector
-        # by dividing by the norm, which should reduce the magnitude of "popular" groups and increase the magnitude of
-        # orphans.
+        # Push the accumulator to the right device on the first it.
+        if self.accumulator.device != x.device:
+            self.accumulator = self.accumulator.to(x.device)
+
+        self.add_norm_to_buffer(x)
+        norm = self.compute_buffer_norm()
         x = x / norm
 
         # Need to re-normalize x so that the groups dimension sum to 1, just like when it was fed in.
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
-
-
-"""
- This is an attention vector mutation that forces attention values to either 1 or 0, with only a single
- value per group getting 1 (the max)
-"""
-class HardAttention(nn.Module):
-    def __init__(self):
-        super(AttentionNorm, self).__init__()
-
-    # Input into forward is an attention tensor of shape (batch,width,height,groups)
-    def forward(self, x: torch.Tensor):
-        assert len(x.shape) == 4
-        pass
 
 
 class BareConvSwitch(nn.Module):
