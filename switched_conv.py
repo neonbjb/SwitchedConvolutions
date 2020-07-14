@@ -68,6 +68,14 @@ class AttentionNorm(nn.Module):
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
 
+    def load_state_dict(self, state_dict, strict=True):
+        # Support backwards compatibility where accumulator_index and accumulator_filled are not in this state_dict
+        t_state = self.state_dict()
+        if 'accumulator_index' not in state_dict.keys():
+            state_dict['accumulator_index'] = t_state['accumulator_index']
+            state_dict['accumulator_filled'] = t_state['accumulator_filled']
+        super(AttentionNorm, self).load_state_dict(state_dict, strict)
+
 
 class BareConvSwitch(nn.Module):
     """
