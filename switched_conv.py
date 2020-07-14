@@ -31,14 +31,14 @@ class AttentionNorm(nn.Module):
         self.accumulator_desired_size = accumulator_size
         self.group_size = group_size
         # These are all tensors so that they get saved with the graph.
-        self.accumulator = torch.zeros(accumulator_size, group_size, requires_grad=False)
-        self.accumulator_index = torch.zeros(1, dtype=torch.long, device='cpu', requires_grad=False)
-        self.accumulator_filled = torch.zeros(1, dtype=torch.bool, device='cpu', requires_grad=False)
+        self.accumulator = nn.Parameter(torch.zeros(accumulator_size, group_size), requires_grad=False)
+        self.accumulator_index = nn.Parameter(torch.zeros(1, dtype=torch.long, device='cpu'), requires_grad=False)
+        self.accumulator_filled = nn.Parameter(torch.zeros(1, dtype=torch.bool, device='cpu'), requires_grad=False)
 
     # Returns tensor of shape (group,) with a normalized mean across the accumulator in the range [0,1]. The intent
     # is to divide your inputs by this value.
     def compute_buffer_norm(self):
-        if self.accumulator_filled == 0:
+        if self.accumulator_filled:
             return torch.mean(self.accumulator, dim=0)
         else:
             return torch.ones(self.group_size, device=self.accumulator.device)
@@ -47,16 +47,18 @@ class AttentionNorm(nn.Module):
         flat = x.sum(dim=[0, 1, 2], keepdim=True)
         norm = flat / torch.mean(flat)
 
+        # This often gets reset in GAN mode. We *never* want gradient accumulation in this parameter.
+        self.accumulator.requires_grad = False
         self.accumulator[self.accumulator_index] = norm.detach()
         self.accumulator_index += 1
         if self.accumulator_index >= self.accumulator_desired_size:
-            self.accumulator_index = 0
-            self.accumulator_filled = True
+            self.accumulator_index *= 0
+            self.accumulator_filled |= True
 
     # Input into forward is an attention tensor of shape (batch,width,height,groups)
     def forward(self, x: torch.Tensor):
         assert len(x.shape) == 4
-        # Push the accumulator to the right device on the first it.
+        # Push the accumulator to the right device on the first iteration.
         if self.accumulator.device != x.device:
             self.accumulator = self.accumulator.to(x.device)
 
@@ -67,14 +69,6 @@ class AttentionNorm(nn.Module):
         # Need to re-normalize x so that the groups dimension sum to 1, just like when it was fed in.
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
-
-    def load_state_dict(self, state_dict, strict=True):
-        # Support backwards compatibility where accumulator_index and accumulator_filled are not in this state_dict
-        t_state = self.state_dict()
-        if 'accumulator_index' not in state_dict.keys():
-            state_dict['accumulator_index'] = t_state['accumulator_index']
-            state_dict['accumulator_filled'] = t_state['accumulator_filled']
-        super(AttentionNorm, self).load_state_dict(state_dict, strict)
 
 
 class BareConvSwitch(nn.Module):
