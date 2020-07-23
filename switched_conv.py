@@ -114,9 +114,17 @@ class BareConvSwitch(nn.Module):
         # desired shape:        (batch, width, height, filters)
         # Note: conv_attention will generally be cast to float32 regardless of the input type, so cast conv_outputs to
         #       float32 as well to match it.
-        attention_result = torch.einsum(
-            "...ij,...j->...i", [conv_outputs.float(), conv_attention]
-        )
+        if self.training:
+            # Doing it all in one op is substantially faster - better for training.
+            attention_result = torch.einsum(
+                "...ij,...j->...i", [conv_outputs.float(), conv_attention]
+            )
+        else:
+            # eval_mode substantially reduces the GPU memory required to compute the attention result by performing the
+            # attention multiplications one at a time. This is probably necessary for large images and attention breadths.
+            attention_result = conv_outputs[:, :, :, :, 0] * conv_attention[:, :, :, 0].unsqueeze(dim=-1)
+            for i in range(1, conv_attention.shape[-1]):
+                attention_result += conv_outputs[:, :, :, :, i] * conv_attention[:, :, :, i].unsqueeze(dim=-1)
 
         # Remember to shift the filters back into the expected slot.
         if output_attention_weights:
