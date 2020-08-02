@@ -3,6 +3,8 @@ from torch import nn
 import torchvision
 import os
 import torch.nn.init as init
+from matplotlib import cm
+import numpy as np
 
 
 # Universal weight initialization procedure used by switched_conv
@@ -42,3 +44,25 @@ def save_attention_to_image(folder, attention_out, attention_size, step, fname_p
     output_path=os.path.join(folder, "attention_maps", fname_part)
     os.makedirs(output_path, exist_ok=True)
     save_image(hsv_img, os.path.join(output_path, "attention_map_%i.png" % (step,)), pix_format="HSV")
+
+
+def save_attention_to_image_rgb(output_folder, attention_out, attention_size, file_prefix, step, cmap_discrete_name='viridis'):
+    magnitude, indices = torch.topk(attention_out, 3, dim=-1)
+    magnitude = magnitude.cpu()
+    indices = indices.cpu()
+    magnitude /= torch.max(torch.abs(torch.min(magnitude)), torch.abs(torch.max(magnitude)))
+    colormap = cm.get_cmap(cmap_discrete_name, attention_size)
+    colormap_mag = cm.get_cmap(cmap_discrete_name)
+    os.makedirs(os.path.join(output_folder), exist_ok=True)
+    for i in range(3):
+        img = torch.tensor(colormap(indices[:,:,:,i].numpy()))
+        img = img.permute((0, 3, 1, 2))
+        save_image(img, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "rgb_%i" % (i,))), pix_format="RGBA")
+
+        mag_image = torch.tensor(colormap_mag(magnitude[:,:,:,i].numpy()))
+        mag_image = mag_image.permute((0, 3, 1, 2))
+        save_image(mag_image, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "mag_%i" % (i,))), pix_format="RGBA")
+
+if __name__ == "__main__":
+    adata = torch.randn(12, 64, 64, 8)
+    save_attention_to_image_rgb(".", adata, 8, "pre", 0)
