@@ -55,11 +55,11 @@ def save_attention_to_image_rgb(output_folder, attention_out, attention_size, fi
     colormap_mag = cm.get_cmap(cmap_discrete_name)
     os.makedirs(os.path.join(output_folder), exist_ok=True)
     for i in range(3):
-        img = torch.tensor(colormap(indices[:,:,:,i].numpy()))
+        img = torch.tensor(colormap(indices[:,:,:,i].detach().numpy()))
         img = img.permute((0, 3, 1, 2))
         save_image(img, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "rgb_%i" % (i,))), pix_format="RGBA")
 
-        mag_image = torch.tensor(colormap_mag(magnitude[:,:,:,i].numpy()))
+        mag_image = torch.tensor(colormap_mag(magnitude[:,:,:,i].detach().numpy()))
         mag_image = mag_image.permute((0, 3, 1, 2))
         save_image(mag_image, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "mag_%i" % (i,))), pix_format="RGBA")
 
