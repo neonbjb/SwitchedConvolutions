@@ -62,7 +62,9 @@ class AttentionNorm(nn.Module):
         if self.accumulator.device != x.device:
             self.accumulator = self.accumulator.to(x.device)
 
-        self.add_norm_to_buffer(x)
+        # In eval, don't change the norm buffer.
+        if self.training:
+            self.add_norm_to_buffer(x)
         norm = self.compute_buffer_norm()
         x = x / norm
 
