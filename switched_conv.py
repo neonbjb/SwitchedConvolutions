@@ -33,12 +33,12 @@ class AttentionNorm(nn.Module):
         # These are all tensors so that they get saved with the graph.
         self.accumulator = nn.Parameter(torch.zeros(accumulator_size, group_size), requires_grad=False)
         self.accumulator_index = nn.Parameter(torch.zeros(1, dtype=torch.long, device='cpu'), requires_grad=False)
-        self.accumulator_filled = nn.Parameter(torch.zeros(1, dtype=torch.bool, device='cpu'), requires_grad=False)
+        self.accumulator_filled = nn.Parameter(torch.zeros(1, dtype=torch.long, device='cpu'), requires_grad=False)
 
     # Returns tensor of shape (group,) with a normalized mean across the accumulator in the range [0,1]. The intent
     # is to divide your inputs by this value.
     def compute_buffer_norm(self):
-        if self.accumulator_filled:
+        if self.accumulator_filled > 0:
             return torch.mean(self.accumulator, dim=0)
         else:
             return torch.ones(self.group_size, device=self.accumulator.device)
@@ -53,7 +53,8 @@ class AttentionNorm(nn.Module):
         self.accumulator_index += 1
         if self.accumulator_index >= self.accumulator_desired_size:
             self.accumulator_index *= 0
-            self.accumulator_filled |= True
+            if self.accumulator_filled <= 0:
+                self.accumulator_filled += 1
 
     # Input into forward is an attention tensor of shape (batch,width,height,groups)
     def forward(self, x: torch.Tensor):
@@ -71,6 +72,15 @@ class AttentionNorm(nn.Module):
         # Need to re-normalize x so that the groups dimension sum to 1, just like when it was fed in.
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
+
+    def load_state_dict(self, state_dict, strict=True):
+
+        # The parameters in self.trunk used to be in this class. To support loading legacy saves, restore them.
+        t_state = self.trunk.state_dict()
+        for k in t_state.keys():
+            if k in state_dict.keys():
+                state_dict["trunk.%s" % (k,)] = state_dict.pop(k)
+        super(RRDBNet, self).load_state_dict(state_dict, strict)
 
 
 class BareConvSwitch(nn.Module):
