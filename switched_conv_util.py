@@ -46,7 +46,7 @@ def save_attention_to_image(folder, attention_out, attention_size, step, fname_p
     save_image(hsv_img, os.path.join(output_path, "attention_map_%i.png" % (step,)), pix_format="HSV")
 
 
-def save_attention_to_image_rgb(output_folder, attention_out, attention_size, file_prefix, step, cmap_discrete_name='viridis'):
+def save_attention_to_image_rgb(output_folder, attention_out, attention_size, file_prefix, step, cmap_discrete_name='viridis', output_mag=True):
     magnitude, indices = torch.topk(attention_out, 3, dim=-1)
     magnitude = magnitude.cpu()
     indices = indices.cpu()
@@ -54,14 +54,15 @@ def save_attention_to_image_rgb(output_folder, attention_out, attention_size, fi
     colormap = cm.get_cmap(cmap_discrete_name, attention_size)
     colormap_mag = cm.get_cmap(cmap_discrete_name)
     os.makedirs(os.path.join(output_folder), exist_ok=True)
-    for i in range(3):
+    for i in range(2):
         img = torch.tensor(colormap(indices[:,:,:,i].detach().numpy()))
         img = img.permute((0, 3, 1, 2))
         save_image(img, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "rgb_%i" % (i,))), pix_format="RGBA")
 
-        mag_image = torch.tensor(colormap_mag(magnitude[:,:,:,i].detach().numpy()))
-        mag_image = mag_image.permute((0, 3, 1, 2))
-        save_image(mag_image, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "mag_%i" % (i,))), pix_format="RGBA")
+        if output_mag:
+            mag_image = torch.tensor(colormap_mag(magnitude[:,:,:,i].detach().numpy()))
+            mag_image = mag_image.permute((0, 3, 1, 2))
+            save_image(mag_image, os.path.join(output_folder, file_prefix + "_%i_%s.png" % (step, "mag_%i" % (i,))), pix_format="RGBA")
 
 if __name__ == "__main__":
     adata = torch.randn(12, 64, 64, 8)
