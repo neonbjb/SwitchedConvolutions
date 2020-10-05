@@ -49,7 +49,7 @@ class AttentionNorm(nn.Module):
 
         # This often gets reset in GAN mode. We *never* want gradient accumulation in this parameter.
         self.accumulator.requires_grad = False
-        self.accumulator[self.accumulator_index] = norm.detach()
+        self.accumulator[self.accumulator_index] = norm.detach().clone()
         self.accumulator_index += 1
         if self.accumulator_index >= self.accumulator_desired_size:
             self.accumulator_index *= 0
@@ -57,14 +57,14 @@ class AttentionNorm(nn.Module):
                 self.accumulator_filled += 1
 
     # Input into forward is an attention tensor of shape (batch,width,height,groups)
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, update_attention_norm=True):
         assert len(x.shape) == 4
         # Push the accumulator to the right device on the first iteration.
         if self.accumulator.device != x.device:
             self.accumulator = self.accumulator.to(x.device)
 
         # In eval, don't change the norm buffer.
-        if self.training:
+        if self.training and update_attention_norm:
             self.add_norm_to_buffer(x)
         norm = self.compute_buffer_norm()
         x = x / norm
@@ -90,7 +90,6 @@ class BareConvSwitch(nn.Module):
                            should be set to a high number, for example 30.
       attention_norm:      If specified, the AttentionNorm layer applied immediately after Softmax.
     """
-
     def __init__(
         self,
         initial_temperature=1,
@@ -111,14 +110,14 @@ class BareConvSwitch(nn.Module):
     # conv_group:      List of inputs (len=n) to the switch, each with shape (b,f,w,h)
     # conv_attention:  Attention computation as an output from a conv layer, of shape (b,n,w,h). Before softmax
     # output_attention_weights: If True, post-softmax attention weights are returned.
-    def forward(self, conv_group, conv_attention, output_attention_weights=False):
+    def forward(self, conv_group, conv_attention, output_attention_weights=False, update_attention_norm=True):
         # Stack up the conv_group input first and permute it to (batch, width, height, filter, groups)
         conv_outputs = torch.stack(conv_group, dim=0).permute(1, 3, 4, 2, 0)
 
         conv_attention = conv_attention.permute(0, 2, 3, 1)
         conv_attention = self.softmax(conv_attention / self.temperature)
         if self.attention_norm:
-            conv_attention = self.attention_norm(conv_attention)
+            conv_attention = self.attention_norm(conv_attention, update_attention_norm)
 
         # conv_outputs shape:   (batch, width, height, filters, groups)
         # conv_attention shape: (batch, width, height, groups)
