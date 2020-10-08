@@ -32,6 +32,7 @@ class AttentionNorm(nn.Module):
         self.group_size = group_size
         # These are all tensors so that they get saved with the graph.
         self.accumulator = nn.Parameter(torch.zeros(accumulator_size, group_size), requires_grad=False)
+        self.accumulator.DO_NOT_TRAIN = True
         self.accumulator_index = nn.Parameter(torch.zeros(1, dtype=torch.long, device='cpu'), requires_grad=False)
         self.accumulator_filled = nn.Parameter(torch.zeros(1, dtype=torch.long, device='cpu'), requires_grad=False)
 
@@ -48,7 +49,6 @@ class AttentionNorm(nn.Module):
         norm = flat / torch.mean(flat)
 
         # This often gets reset in GAN mode. We *never* want gradient accumulation in this parameter.
-        self.accumulator.requires_grad = False
         self.accumulator[self.accumulator_index] = norm.detach().clone()
         self.accumulator_index += 1
         if self.accumulator_index >= self.accumulator_desired_size:
