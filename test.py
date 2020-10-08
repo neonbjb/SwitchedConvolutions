@@ -12,7 +12,7 @@ from torchvision import datasets, transforms
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.init as init
-from switched_conv import SwitchedConv2d
+from .switched_conv import SwitchedConv2d
 
 
 def initialize_weights(net_l, scale=1):

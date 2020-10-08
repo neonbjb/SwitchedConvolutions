@@ -2,7 +2,7 @@ import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from switched_conv_util import initialize_weights
+from .switched_conv_util import initialize_weights
 
 """
 AttentionNorm is meant to be applied against the Softmax output of an attention function across a large set of
