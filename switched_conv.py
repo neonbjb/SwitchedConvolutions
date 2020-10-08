@@ -2,6 +2,7 @@ import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 from .switched_conv_util import initialize_weights
 
 """
@@ -73,6 +74,11 @@ class AttentionNorm(nn.Module):
         groups_sum = x.sum(dim=3, keepdim=True)
         return x / groups_sum
 
+    def reduce_params(self):
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(self.accumulator)
+            self.accumulator /= dist.get_world_size()
+
     def load_state_dict(self, state_dict, strict=True):
 
         # The parameters in self.trunk used to be in this class. To support loading legacy saves, restore them.
@@ -103,6 +109,9 @@ class BareConvSwitch(nn.Module):
 
         initialize_weights(self)
 
+    def reduce_norm_params(self):
+        self.attention_norm.reduce_params()
+        
     def set_attention_temperature(self, temp):
         self.temperature = temp
 
