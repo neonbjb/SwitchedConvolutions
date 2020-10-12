@@ -79,15 +79,6 @@ class AttentionNorm(nn.Module):
             dist.all_reduce(self.accumulator)
             self.accumulator /= dist.get_world_size()
 
-    def load_state_dict(self, state_dict, strict=True):
-
-        # The parameters in self.trunk used to be in this class. To support loading legacy saves, restore them.
-        t_state = self.trunk.state_dict()
-        for k in t_state.keys():
-            if k in state_dict.keys():
-                state_dict["trunk.%s" % (k,)] = state_dict.pop(k)
-        super(RRDBNet, self).load_state_dict(state_dict, strict)
-
 
 class BareConvSwitch(nn.Module):
     """
