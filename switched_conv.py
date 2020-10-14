@@ -110,12 +110,11 @@ class BareConvSwitch(nn.Module):
     # conv_group:      List of inputs (len=n) to the switch, each with shape (b,f,w,h)
     # conv_attention:  Attention computation as an output from a conv layer, of shape (b,n,w,h). Before softmax
     # output_attention_weights: If True, post-softmax attention weights are returned.
-    def forward(self, conv_group, conv_attention, output_attention_weights=False, update_attention_norm=True):
+    def forward(self, conv_group, conv_attention, output_attention_weights=False, update_attention_norm=True, output_attention_logits=False):
         # Stack up the conv_group input first and permute it to (batch, width, height, filter, groups)
         conv_outputs = torch.stack(conv_group, dim=0).permute(1, 3, 4, 2, 0)
-
-        conv_attention = conv_attention.permute(0, 2, 3, 1)
-        conv_attention = self.softmax(conv_attention / self.temperature)
+        attention_logits = conv_attention.permute(0, 2, 3, 1)
+        conv_attention = self.softmax(attention_logits / self.temperature)
         if self.attention_norm:
             conv_attention = self.attention_norm(conv_attention, update_attention_norm)
 
@@ -138,10 +137,16 @@ class BareConvSwitch(nn.Module):
                 attention_result += conv_outputs[:, :, :, :, i] * conv_attention[:, :, :, i].unsqueeze(dim=-1)
 
         # Remember to shift the filters back into the expected slot.
+        results = attention_result.permute(0, 3, 1, 2),
         if output_attention_weights:
-            return attention_result.permute(0, 3, 1, 2), conv_attention
+            results = results + (conv_attention,)
+        if output_attention_logits:
+            results = results + (attention_logits,)
+
+        if len(results) == 1:
+            return results[0]
         else:
-            return attention_result.permute(0, 3, 1, 2)
+            return results
 
 
 class ConvSwitch(nn.Module):
