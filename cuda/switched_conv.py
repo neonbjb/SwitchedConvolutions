@@ -9,8 +9,6 @@ import torchvision
 from lambda_networks import LambdaLayer
 from torch.nn import init, Conv2d, ZeroPad2d
 
-from training.networks import FullyConnectedLayer, SynthesisLayer
-
 
 def SwitchedConvRoutingNormal(input, selector, weight, bias, stride=1):
     convs = []
@@ -183,17 +181,22 @@ class SwitchedConvHardRouting(nn.Module):
                  name,
                  in_c,
                  out_c,
+                 kernel_sz,
                  breadth,
+                 stride=1,
+                 bias=True,
                  dropout_rate=0.0,
                  include_coupler: bool = False,  # A 'coupler' is a latent converter which can transforms the input into a switch selector. For large networks using many SwitchedConvs, it is recommended to provide an external coupler.
                  coupler_mode: str = 'standard',
                  coupler_dim_in: int = 0,
-                 hard_en=True,
-                 **kwargs):
+                 hard_en=True):  # A test switch that, when used in 'emulation mode' (where all convs are calculated using torch functions) computes soft-attention instead of hard-attention.
         super().__init__()
         self.name = name
         self.in_channels = in_c
         self.out_channels = out_c
+        self.kernel_size = kernel_sz
+        self.stride = stride
+        self.has_bias = bias
         self.breadth = breadth
         self.dropout_rate = dropout_rate
         self.step_count = 0
@@ -202,12 +205,12 @@ class SwitchedConvHardRouting(nn.Module):
             coupler_dim_in = in_c
         if include_coupler:
             if coupler_mode == 'standard':
-                self.coupler = Conv2d(coupler_dim_in, breadth, kernel_size=1, stride=1)
+                self.coupler = Conv2d(coupler_dim_in, breadth, kernel_size=1, stride=self.stride)
             elif coupler_mode == 'lambda':
                 self.coupler = nn.Sequential(nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
                                              LambdaLayer(dim=coupler_dim_in, dim_out=breadth, r=23, dim_k=16, heads=2, dim_u=1),
                                              nn.ReLU(),
-                                             Conv2d(breadth, breadth, 1, stride=1))
+                                             Conv2d(breadth, breadth, 1, stride=self.stride))
             elif coupler_mode == 'lambda2':
                 self.coupler = nn.Sequential(LambdaLayer(dim=coupler_dim_in, dim_out=coupler_dim_in, r=23, dim_k=16, heads=2, dim_u=1),
                                              nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
@@ -215,23 +218,39 @@ class SwitchedConvHardRouting(nn.Module):
                                              LambdaLayer(dim=coupler_dim_in, dim_out=breadth, r=23, dim_k=16, heads=2, dim_u=1),
                                              nn.GroupNorm(num_groups=1, num_channels=breadth),
                                              nn.ReLU(),
-                                             Conv2d(breadth, breadth, 1, stride=1))
+                                             Conv2d(breadth, breadth, 1, stride=self.stride))
         else:
             self.coupler = None
-        self.gate = HardRoutingGate(breadth, hard_en=True)
+        self.gate = HardRoutingGate(breadth, hard_en=False)
         self.hard_en = hard_en
 
-        self.convs = nn.ModuleList([SynthesisLayer(in_c, out_c, **kwargs) for _ in range(breadth)])
+        self.weight = nn.Parameter(torch.empty(out_c, in_c, breadth, kernel_sz, kernel_sz))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_c))
+        else:
+            self.bias = torch.zeros(out_c)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight[:,:,0,:,:])
+            bound = 1 / math.sqrt(fan_in)
+            init.uniform_(self.bias, -bound, bound)
 
     def load_weights_from_conv(self, cnv):
         sd = cnv.state_dict()
         sd['weight'] = sd['weight'].unsqueeze(2).repeat(1,1,self.breadth,1,1)
         self.load_state_dict(sd)
 
-    def forward(self, input, *args, **kwargs):
+    def forward(self, input, selector=None):
+        if self.bias.device != input.device:
+            self.bias = self.bias.to(input.device)  # Because this bias can be a tensor that is not moved with the rest of the module.
+
         # If a coupler was specified, run that to convert selector into a softmax distribution.
         if self.coupler:
-            selector = input.float()
+            if selector is None:  # A coupler can convert from any input to a selector, so 'None' is allowed.
+                selector = input
             selector = self.coupler(selector)
         assert selector is not None
 
@@ -252,15 +271,16 @@ class SwitchedConvHardRouting(nn.Module):
             self.save_attention_to_image_rgb(os.path.join('work_dirs/sw_debug', "%s_selector_%i.png" % (self.name, self.step_count)), selector.detach().clone(), self.breadth)
         self.step_count += 1
 
-        outs = [c(input, *args, **kwargs) for c in self.convs]
-        # The SynthesisLayer this class wraps can optionally upsample the result. Lacking any real good way to integrate that into the coupler, just interpolate.
-        selector = F.interpolate(selector, size=outs[0].shape[2:], mode='bilinear', align_corners=False)
-        outs = torch.stack(outs, dim=1) * selector.unsqueeze(dim=2).type(outs[0].dtype)
-        return outs.sum(dim=1)
+        if False:
+            # This is a custom CUDA implementation which should be faster and less memory intensive (once completed).
+            return SwitchedConvHardRoutingFunction.apply(input, selector, self.weight, self.bias, self.stride)
+        else:
+            # This composes the switching functionality using raw Torch, which basically consists of computing each of <breadth> convs separately and combining them.
+            return SwitchedConvRoutingNormal(input, selector, self.weight, self.bias, self.stride)
 
     def save_attention_to_image_rgb(self, output_file, attention_out, attention_size, cmap_discrete_name='viridis'):
         from matplotlib import cm
-        magnitude, indices = torch.topk(attention_out, 1, dim=1)
+        magnitude, indices = torch.topk(attention_out, 3, dim=1)
         indices = indices.cpu()
         colormap = cm.get_cmap(cmap_discrete_name, attention_size)
         img = torch.tensor(colormap(indices[:, 0, :, :].detach().numpy()))  # TODO: use other k's
@@ -277,11 +297,10 @@ def convert_net_to_switched_conv(module, switch_breadth, allow_list, dropout_rat
         for sub in modpath[:-1]:
             mod = getattr(mod, sub)
         old_conv = getattr(mod, modpath[-1])
-        new_conv = SwitchedConvHardRouting('.'.join(modpath), old_conv.in_channels, old_conv.out_channels, switch_breadth, include_coupler=True, dropout_rate=dropout_rate, coupler_mode=coupler_mode,
-                                           # SynthesisBlock params
-                                           w_dim=old_conv.w_dim, resolution=old_conv.resolution, kernel_size=old_conv.kernel_size, up=old_conv.up,
-                                           use_noise=old_conv.use_noise, activation=old_conv.activation, conv_clamp=old_conv.conv_clamp).to(old_conv.weight.device)
+        new_conv = SwitchedConvHardRouting('.'.join(modpath), old_conv.in_channels, old_conv.out_channels, old_conv.kernel_size[0], switch_breadth, old_conv.stride[0], old_conv.bias is not None,
+                                           include_coupler=True, dropout_rate=dropout_rate, coupler_mode=coupler_mode)
         new_conv = new_conv.to(old_conv.weight.device)
+        assert old_conv.dilation == 1 or old_conv.dilation == (1,1) or old_conv.dilation is None
         if isinstance(mod, nn.Sequential) or isinstance(mod, nn.ModuleList):
             # If we use the standard logic (in the else case) here, it reorders the sequential.
             # Instead, extract the OrderedDict from the current sequential and edit that.
@@ -292,19 +311,14 @@ def convert_net_to_switched_conv(module, switch_breadth, allow_list, dropout_rat
 
 def convert_state_dict_to_switched_conv(sd, switch_breadth, allow_list):
     converted = 0
-    new_dict = {}
-    for sn in sd.keys():
-        replaced = False
-        for cname in allow_list:
-            if cname in sn:
-                for i in range(switch_breadth):
-                    new_dict[sn.replace(cname, f'{cname}.convs.{i}')] = sd[sn].clone()
+    for cname in allow_list:
+        for sn in sd.keys():
+            if cname in sn and sn.endswith('weight'):
+                # If you are getting an error here - it's likely you are trying to convert the weights for a model that has already been converted! If using SwitchedConvConversionWrapper, this can also mean that the state_dict you provided is not compatible with the converted model.
+                sd[sn] = sd[sn].unsqueeze(2).repeat(1,1,switch_breadth,1,1)
                 converted += 1
-                replaced = True
-        if not replaced:
-            new_dict[sn] = sd[sn].clone()
     print(f"Converted {converted} parameters.")
-    return new_dict
+    return sd
 
 
 class SwitchedConvConversionWrapper:
